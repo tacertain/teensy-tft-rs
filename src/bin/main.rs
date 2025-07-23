@@ -44,9 +44,22 @@ fn main() -> ! {
             // Handle error
         }
         
-        // Draw some graphics
-        // Note: This is a simplified example
-        // Real implementation would need proper display driver integration
+        // Draw some graphics using embedded-graphics
+        use teensy_tft_rs::graphics::{Graphics, colors::*};
+        use embedded_graphics::geometry::{Point, Size};
+        
+        // Draw a red rectangle
+        if let Err(_) = Graphics::draw_filled_rect(&mut display, Point::new(10, 10), Size::new(100, 50), RED) {
+            // Handle error
+        }
+        
+        // Draw a green circle
+        if let Err(_) = Graphics::draw_circle(&mut display, Point::new(150, 100), 30, GREEN) {
+            // Handle error
+        }
+        
+        // Add a delay before next frame
+        cortex_m::asm::delay(60_000_000); // ~100ms delay at 600MHz
         
         // Add a small delay
         cortex_m::asm::delay(1_000_000);
