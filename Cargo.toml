@@ -1,0 +1,39 @@
+[package]
+name = "teensy-tft-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+
+[dependencies]
+# Core embedded dependencies
+cortex-m = "0.7"
+embedded-hal = "0.2"
+nb = "1.0"
+panic-halt = "0.2"
+
+# Teensy 4.x specific (assuming Teensy 4.0/4.1)
+teensy4-bsp = { version = "0.5", features = ["rt"] }
+teensy4-panic = "0.2"
+
+# Display and graphics
+embedded-graphics = "0.8"
+display-interface = "0.5"
+display-interface-spi = "0.5"
+
+[dependencies.heapless]
+version = "0.8"
+default-features = false
+
+[[bin]]
+name = "main"
+test = false
+bench = false
+
+[profile.release]
+debug = true
+lto = true
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = 1
