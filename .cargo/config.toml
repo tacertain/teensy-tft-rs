@@ -6,3 +6,8 @@ runner = "teensy_loader_cli --mcu=TEENSY41 -w"
 rustflags = [
   "-C", "link-arg=-Tt4link.x",
 ]
+
+[alias]
+build-hex = "objcopy --release --bin main -- -O ihex target/main.hex"
+flash = "run --release --bin main"
+size = "size --release --bin main"

@@ -14,33 +14,33 @@ The project has been configured with a basic graphics library setup that include
 
 ### Teensy 4.1 Pin Assignments
 - **SPI4**: LPSPI4 peripheral for display communication
-- **DC Pin**: GPIO pin 8 (Data/Command control)
-- **Reset Pin**: GPIO pin 9 (Display reset)
-- **SPI Pins**: Standard LPSPI4 pins (MOSI, SCK)
+- **DC Pin**: GPIO pin 9 (Data/Command control)
+- **Reset Pin**: Connected to 3V (hardware reset on power-up)
+- **SPI Pins**: Standard LPSPI4 pins (MOSI, SCK, CS)
 
 ### Display Specifications
 - **Resolution**: 240x320 pixels
 - **Color Format**: RGB565 (16-bit color)
-- **Interface**: SPI with DC and Reset control
+- **Interface**: SPI with DC control (reset handled externally)
 
 ## Software Architecture
 
 ### Display Module (`src/display.rs`)
 ```rust
-pub struct TftDisplay<SPI, DC, RST> {
+pub struct TftDisplay<SPI, DC> {
     spi: SPI,
     dc: DC,
-    reset: RST,
     width: u16,
     height: u16,
 }
 ```
 
 Key features:
-- Generic over SPI, DC, and Reset pin types
+- Generic over SPI and DC pin types (reset pin handled externally)
 - embedded-graphics `DrawTarget` trait implementation
 - Basic initialization and control methods
 - Support for 240x320 pixel displays
+- Reset pin assumed to be tied to 3V for automatic power-on reset
 
 ### Graphics Module (`src/graphics.rs`)
 ```rust
@@ -100,8 +100,8 @@ use teensy_tft_rs::display::TftDisplay;
 use teensy_tft_rs::graphics::{Graphics, colors::*};
 use embedded_graphics::geometry::{Point, Size};
 
-// Initialize display
-let mut display = TftDisplay::new(spi, dc_pin, reset_pin);
+// Initialize display (reset pin tied to 3V externally)
+let mut display = TftDisplay::new(spi, dc_pin);
 display.init().expect("Failed to initialize display");
 
 // Draw graphics
@@ -112,11 +112,26 @@ Graphics::draw_circle(&mut display, Point::new(150, 100), 30, GREEN);
 ## Build Instructions
 
 ```powershell
-# Build for Teensy 4.1
+# Build for Teensy 4.1 (automatically creates hex file)
 cargo build --release
 
-# The output will be in:
-# target/thumbv7em-none-eabihf/release/main
+# Or use VS Code task (Ctrl+Shift+P -> "Tasks: Run Task" -> "Build Embedded Rust Project")
+# This will build the project and automatically create target/main.hex
+
+# Build binary only (without hex file)
+# Use the "Build Binary Only" task in VS Code
+
+# Flash to Teensy 4.1
+cargo flash
+# Or: teensy_loader_cli --mcu=TEENSY41 -w target/main.hex
+
+# Check binary size
+cargo size --release --bin main
 ```
+
+The default build task now automatically:
+1. Builds the release binary
+2. Creates the hex file at `target/main.hex`
+3. Shows completion message
 
 The project is now ready for hardware testing and further development!

@@ -4,6 +4,23 @@
 		{
 			"label": "Build Embedded Rust Project",
 			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-Command",
+				"cargo build --release --bin main; if ($LASTEXITCODE -eq 0) { cargo objcopy --release --bin main -- -O ihex target/main.hex; Write-Host 'Build completed. Hex file created: target/main.hex' }"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$rustc"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build Binary Only",
+			"type": "shell",
 			"command": "cargo",
 			"args": [
 				"build",
@@ -11,7 +28,7 @@
 			],
 			"group": {
 				"kind": "build",
-				"isDefault": true
+				"isDefault": false
 			},
 			"problemMatcher": [
 				"$rustc"

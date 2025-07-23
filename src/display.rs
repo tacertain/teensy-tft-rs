@@ -20,40 +20,37 @@ impl DelayMs<u16> for Delay {
 }
 
 /// Basic TFT display driver wrapper
-pub struct TftDisplay<SPI, DC, RST> {
+pub struct TftDisplay<SPI, DC> {
     spi: SPI,
     dc: DC,
-    reset: RST,
     width: u16,
     height: u16,
 }
 
-impl<SPI, DC, RST> TftDisplay<SPI, DC, RST>
+impl<SPI, DC> TftDisplay<SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
-    RST: OutputPin,
 {
     /// Create a new TFT display instance
-    pub fn new(spi: SPI, dc: DC, reset: RST) -> Self {
+    /// Reset pin is assumed to be tied to 3V externally
+    pub fn new(spi: SPI, dc: DC) -> Self {
         Self {
             spi,
             dc,
-            reset,
             width: 240,
             height: 320,
         }
     }
 
     /// Initialize the display
+    /// Reset pin is connected to 3V externally, so no reset sequence needed
     pub fn init(&mut self) -> Result<(), &'static str> {
         let mut delay = Delay;
         
-        // Reset the display
-        self.reset.set_low().map_err(|_| "Reset pin error")?;
-        delay.delay_ms(100);
-        self.reset.set_high().map_err(|_| "Reset pin error")?;
-        delay.delay_ms(100);
+        // Reset pin is connected to 3V externally, so no reset sequence needed
+        // The display will power up in a reset state
+        delay.delay_ms(200); // Wait for display to stabilize after power-on
         
         // Basic initialization sequence would go here
         // For now, just return success
@@ -87,11 +84,10 @@ where
 }
 
 // Basic DrawTarget implementation for embedded-graphics
-impl<SPI, DC, RST> DrawTarget for TftDisplay<SPI, DC, RST>
+impl<SPI, DC> DrawTarget for TftDisplay<SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
-    RST: OutputPin,
 {
     type Color = Rgb565;
     type Error = &'static str;
@@ -110,11 +106,10 @@ where
     }
 }
 
-impl<SPI, DC, RST> OriginDimensions for TftDisplay<SPI, DC, RST>
+impl<SPI, DC> OriginDimensions for TftDisplay<SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
-    RST: OutputPin,
 {
     fn size(&self) -> Size {
         Size::new(self.width as u32, self.height as u32)

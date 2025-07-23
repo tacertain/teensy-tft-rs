@@ -26,16 +26,21 @@ fn main() -> ! {
     
     // Configure GPIO pins for display control
     let dc_pin = peripherals.gpio2.output(peripherals.pins.p9);
-    let reset_pin = peripherals.gpio2.output(peripherals.pins.p8);
     
-    // Create display instance
-    let mut display = TftDisplay::new(spi, dc_pin, reset_pin);
+    // Configure external LED on pin 2
+    let led = peripherals.gpio4.output(peripherals.pins.p2);
+    
+    // Create display instance (reset pin is tied to 3V externally)
+    let mut display = TftDisplay::new(spi, dc_pin);
     
     // Initialize the display
-    if let Err(_) = display.init() {
-        // Handle initialization error
-        loop {}
-    }
+    display.init().expect("Failed to initialize display");
+    
+    // Turn on LED to indicate successful initialization
+    led.set();
+    
+    // Counter for LED toggle timing (60 frames = 1 second at 60Hz)
+    let mut frame_counter = 0u32;
     
     // Main application loop
     loop {
@@ -58,10 +63,16 @@ fn main() -> ! {
             // Handle error
         }
         
-        // Add a delay before next frame
-        cortex_m::asm::delay(60_000_000); // ~100ms delay at 600MHz
+        // Increment frame counter
+        frame_counter += 1;
         
-        // Add a small delay
-        cortex_m::asm::delay(1_000_000);
+        // Toggle LED every 60 frames (1 second at 60Hz)
+        if frame_counter >= 60 {
+            led.toggle();
+            frame_counter = 0;
+        }
+        
+        // 60Hz display update delay (~16.67ms at 600MHz)
+        cortex_m::asm::delay(10_000_000); // ~16.67ms delay for 60Hz
     }
 }
