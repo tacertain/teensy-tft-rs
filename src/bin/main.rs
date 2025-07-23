@@ -10,7 +10,7 @@ use teensy_tft_rs::TftDisplay;
 
 #[entry]
 fn main() -> ! {
-    let mut peripherals = board::t40(board::instances());
+    let mut peripherals = board::t41(board::instances());
     
     // Configure SPI for the display with frequency
     let spi = board::lpspi(

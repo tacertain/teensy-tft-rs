@@ -1,10 +1,10 @@
 # Teensy TFT Rust
 
-An embedded Rust library and application for controlling TFT displays on Teensy 4.0/4.1 microcontrollers.
+An embedded Rust library and application for controlling TFT displays on Teensy 4.1 microcontrollers.
 
 ## Overview
 
-This project provides a `no_std` Rust library for interfacing with TFT displays using the Teensy 4.x platform. It includes:
+This project provides a `no_std` Rust library for interfacing with TFT displays using the Teensy 4.1 platform. It includes:
 
 - Low-level display drivers using SPI communication
 - Graphics primitives and drawing utilities via `embedded-graphics`
@@ -13,7 +13,7 @@ This project provides a `no_std` Rust library for interfacing with TFT displays 
 
 ## Hardware Requirements
 
-- **Teensy 4.0 or 4.1** microcontroller
+- **Teensy 4.1** microcontroller
 - **TFT Display** with SPI interface (e.g., ILI9341, ST7735)
 - **Connections:**
   - MOSI (Pin 11) → Display SDI/SDA
@@ -97,7 +97,7 @@ use teensy_tft_rs::{TftDisplay, Graphics, colors};
 
 #[entry]
 fn main() -> ! {
-    let mut peripherals = board::init();
+    let mut peripherals = board::t41(board::instances());
     
     // Initialize SPI and GPIO pins
     let spi = board::lpspi(/* ... */);

@@ -2,10 +2,10 @@
 
 # Teensy TFT Rust Project Instructions
 
-This is an embedded Rust project for Teensy microcontrollers with TFT display support.
+This is an embedded Rust project for Teensy 4.1 microcontrollers with TFT display support.
 
 ## Project Context
-- Target: Teensy 4.0/4.1 (ARM Cortex-M7, iMXRT1062)
+- Target: Teensy 4.1 (ARM Cortex-M7, iMXRT1062)
 - Architecture: ARM Cortex-M7 (thumbv7em-none-eabihf)
 - No standard library (`#![no_std]`)
 - Uses embedded-hal traits for hardware abstraction

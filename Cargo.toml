@@ -3,6 +3,11 @@ name = "teensy-tft-rs"
 version = "0.1.0"
 edition = "2021"
 authors = ["Your Name <your.email@example.com>"]
+description = "Embedded Rust library for TFT displays on Teensy 4.1"
+repository = "https://github.com/yourusername/teensy-tft-rs"
+license = "MIT OR Apache-2.0"
+keywords = ["embedded", "teensy", "tft", "display", "graphics"]
+categories = ["embedded", "hardware-support"]
 
 [dependencies]
 # Core embedded dependencies
