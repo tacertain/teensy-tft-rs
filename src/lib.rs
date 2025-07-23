@@ -8,5 +8,5 @@
 pub mod display;
 pub mod graphics;
 
-pub use display::*;
+pub use display::{TftDisplay, DisplayError};
 pub use graphics::*;
