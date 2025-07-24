@@ -53,13 +53,12 @@ where
 {
     /// Create a new TFT display instance
     /// Reset pin is assumed to be tied to 3V externally
-    /// For testing with smaller buffers, we'll use 100x100 dimensions
     pub fn new(spi: SPI, dc: DC) -> Self {
         Self {
             spi,
             dc,
-            width: 100,  // Reduced for testing with smaller buffers
-            height: 100, // Reduced for testing with smaller buffers
+            width: 240,
+            height: 320,
         }
     }
 
