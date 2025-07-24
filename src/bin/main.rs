@@ -17,6 +17,11 @@ core::arch::global_asm!(
     "#
 );
 
+// Static frame buffers for double buffering
+// Using smaller buffers (100x100 = 10,000 u16 = 20KB each, 40KB total)
+static mut BACK_BUFFER: [u16; 100 * 100] = [0; 100 * 100];
+static mut FRONT_BUFFER: [u16; 100 * 100] = [0; 100 * 100];
+
 #[entry]
 fn main() -> ! {
     let mut peripherals = board::t41(board::instances());
@@ -54,9 +59,14 @@ fn main() -> ! {
     led.set();
     cortex_m::asm::delay(60_000_000); // ~100ms delay
 
-    // Test 2: Now try double buffered display creation
-    let mut display = DoubleBufferedDisplay::new(base_display)
-        .expect("Failed to create double buffered display");
+    // Test 2: Now try double buffered display creation with static buffers
+    let mut display = unsafe {
+        DoubleBufferedDisplay::new(
+            base_display, 
+            &mut BACK_BUFFER, 
+            &mut FRONT_BUFFER
+        ).expect("Failed to create double buffered display")
+    };
     
     // Flash LED twice to indicate double buffering succeeded
     led.clear();
@@ -67,18 +77,57 @@ fn main() -> ! {
     cortex_m::asm::delay(60_000_000);
     led.set();
     
-    // If we get here, both worked - show different success pattern
+    // Small delay before starting graphics
+    cortex_m::asm::delay(120_000_000); // ~200ms delay
+    
+    // Counter for LED toggle timing (60 frames = 1 second at 60Hz)
+    let mut frame_counter = 0u32;
+    
+    // Animation variables for smooth movement  
+    let mut circle_x = 50i32;
+    let mut circle_direction = 1i32;
+    
+    // Main application loop with graphics
     loop {
-        // 7 quick blinks to show complete success
-        for _ in 0..7 {
-            led.set();
-            cortex_m::asm::delay(30_000_000);   // ~50ms on
-            led.clear(); 
-            cortex_m::asm::delay(30_000_000);   // ~50ms off
+        // Clear the back buffer to black
+        display.clear(teensy_tft_rs::graphics::colors::BLACK);
+        
+        // Draw some graphics using embedded-graphics
+        use teensy_tft_rs::graphics::{Graphics, colors::*};
+        use embedded_graphics::geometry::{Point, Size};
+        
+        // Draw a red rectangle
+        if let Err(_) = Graphics::draw_filled_rect(&mut display, Point::new(10, 10), Size::new(50, 30), RED) {
+            // Handle error
         }
         
-        // Long pause
-        cortex_m::asm::delay(600_000_000); // ~1 second pause
+        // Draw an animated green circle that bounces horizontally (smaller bounds for 100x100 buffer)
+        if let Err(_) = Graphics::draw_circle(&mut display, Point::new(circle_x, 60), 10, GREEN) {
+            // Handle error
+        }
+        
+        // Update circle animation (bounces between x=15 and x=85 for 100x100 display)
+        circle_x += circle_direction * 1; // Move 1 pixel per frame
+        if circle_x <= 15 || circle_x >= 85 {
+            circle_direction = -circle_direction; // Reverse direction
+        }
+        
+        // Present the frame to the display (swap buffers and transfer)
+        if let Err(_) = display.present() {
+            // Handle error - could flash LED or take other action
+        }
+        
+        // Increment frame counter
+        frame_counter += 1;
+        
+        // Toggle LED every 60 frames (1 second at 60Hz)
+        if frame_counter >= 60 {
+            led.toggle();
+            frame_counter = 0;
+        }
+        
+        // 60Hz display update delay (~16.67ms at 600MHz)
+        cortex_m::asm::delay(10_000_000); // ~16.67ms delay for 60Hz
     }
     
     // Unreachable code below - commented out for testing
@@ -96,9 +145,14 @@ fn main() -> ! {
         led.set();
         cortex_m::asm::delay(60_000_000); // ~100ms delay
         
-        // Create double buffered display for smooth graphics
-        let mut display = DoubleBufferedDisplay::new(base_display)
-            .expect("Failed to create double buffered display");
+        // Create double buffered display for smooth graphics with static buffers
+        let mut display = unsafe {
+            DoubleBufferedDisplay::new(
+                base_display, 
+                &mut BACK_BUFFER, 
+                &mut FRONT_BUFFER
+            ).expect("Failed to create double buffered display")
+        };
         
         // Flash LED twice to indicate double buffering succeeded
         led.clear();

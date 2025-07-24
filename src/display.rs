@@ -53,12 +53,13 @@ where
 {
     /// Create a new TFT display instance
     /// Reset pin is assumed to be tied to 3V externally
+    /// For testing with smaller buffers, we'll use 100x100 dimensions
     pub fn new(spi: SPI, dc: DC) -> Self {
         Self {
             spi,
             dc,
-            width: 240,
-            height: 320,
+            width: 100,  // Reduced for testing with smaller buffers
+            height: 100, // Reduced for testing with smaller buffers
         }
     }
 
@@ -232,33 +233,65 @@ where
 /// This implementation uses two frame buffers - one for drawing (back buffer)
 /// and one for display (front buffer). Drawing operations write to the back buffer,
 /// and present() swaps the buffers and transfers to the physical display.
-pub struct DoubleBufferedDisplay<SPI, DC> {
+/// 
+/// Buffers are provided externally to allow static allocation in embedded systems.
+pub struct DoubleBufferedDisplay<'a, SPI, DC> {
     display: TftDisplay<SPI, DC>,
-    // Frame buffers - RGB565 format (2 bytes per pixel)
-    // For 240x320 display: 240 * 320 * 2 = 153,600 bytes per buffer
-    back_buffer: [u16; 240 * 320],
-    front_buffer: [u16; 240 * 320],
+    // Frame buffers provided externally - RGB565 format (2 bytes per pixel)
+    back_buffer: &'a mut [u16],
+    front_buffer: &'a mut [u16],
     width: u16,
     height: u16,
     dirty: bool, // Track if back buffer has changes
 }
 
-impl<SPI, DC> DoubleBufferedDisplay<SPI, DC>
+impl<'a, SPI, DC> DoubleBufferedDisplay<'a, SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
 {
-    /// Create a new double-buffered display
-    pub fn new(mut display: TftDisplay<SPI, DC>) -> Result<Self, DisplayError> {
+    /// Create a new double-buffered display with externally provided buffers
+    /// 
+    /// # Arguments
+    /// * `display` - The underlying TFT display
+    /// * `back_buffer` - Mutable slice for the back buffer (drawing buffer)
+    /// * `front_buffer` - Mutable slice for the front buffer (display buffer)
+    /// 
+    /// Both buffers should be the same size and match the display resolution.
+    /// For a 240x320 display, each buffer should be 76,800 u16 elements.
+    pub fn new(
+        mut display: TftDisplay<SPI, DC>,
+        back_buffer: &'a mut [u16],
+        front_buffer: &'a mut [u16],
+    ) -> Result<Self, DisplayError> {
+        // Validate buffer sizes match
+        if back_buffer.len() != front_buffer.len() {
+            return Err(DisplayError::InitializationFailed);
+        }
+        
         // Initialize the underlying display
         display.init()?;
         
         let (width, height) = display.dimensions();
         
+        // Validate buffer size matches display dimensions
+        let expected_size = (width as usize) * (height as usize);
+        if back_buffer.len() != expected_size {
+            return Err(DisplayError::InitializationFailed);
+        }
+        
+        // Clear the buffers
+        for pixel in back_buffer.iter_mut() {
+            *pixel = 0; // Black (RGB565 0x0000)
+        }
+        for pixel in front_buffer.iter_mut() {
+            *pixel = 0; // Black (RGB565 0x0000)
+        }
+        
         let mut double_buffered = Self {
             display,
-            back_buffer: [0; 240 * 320], // Black pixels (RGB565 0x0000)
-            front_buffer: [0; 240 * 320],
+            back_buffer,
+            front_buffer,
             width,
             height,
             dirty: false,
@@ -383,7 +416,7 @@ where
 }
 
 // Implement DrawTarget for embedded-graphics compatibility
-impl<SPI, DC> DrawTarget for DoubleBufferedDisplay<SPI, DC>
+impl<'a, SPI, DC> DrawTarget for DoubleBufferedDisplay<'a, SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
@@ -409,7 +442,7 @@ where
     }
 }
 
-impl<SPI, DC> OriginDimensions for DoubleBufferedDisplay<SPI, DC>
+impl<'a, SPI, DC> OriginDimensions for DoubleBufferedDisplay<'a, SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
