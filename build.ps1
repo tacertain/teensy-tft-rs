@@ -13,12 +13,31 @@ if ($LASTEXITCODE -ne 0) {
 # Validate with teensy_size
 Write-Host "Validating binary with teensy_size..."
 $teensySize = Join-Path $env:USERPROFILE ".platformio\packages\tool-teensy\teensy_size.exe"
+$rustTeensySize = "C:\Users\tacer\GitHub\teensy_size\rust-teensy-size.ps1"
 $binaryPath = ".\target\thumbv7em-none-eabihf\release\main"
 
-if (Test-Path $teensySize) {
-    Write-Host ""
-    Write-Host "teensy_size output:" -ForegroundColor Cyan
-    Write-Host "==================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "teensy_size output:" -ForegroundColor Cyan
+Write-Host "==================" -ForegroundColor Cyan
+
+# Use our custom Rust-aware teensy_size if available, otherwise fall back to original
+if (Test-Path $rustTeensySize) {
+    Write-Host "Using Rust-aware teensy_size..." -ForegroundColor Yellow
+    
+    try {
+        & powershell -ExecutionPolicy Bypass -File $rustTeensySize $binaryPath
+        $teensySizeSuccess = ($LASTEXITCODE -eq 0)
+        
+        if (-not $teensySizeSuccess) {
+            Write-Error "Memory validation failed: Program exceeds available memory"
+        }
+    }
+    catch {
+        Write-Warning "Rust-aware teensy_size failed: $_"
+        $teensySizeSuccess = $false
+    }
+} elseif (Test-Path $teensySize) {
+    Write-Host "Using original teensy_size..." -ForegroundColor Yellow
     
     # Run teensy_size and capture output while preserving formatting
     $teensySizeResult = & $teensySize $binaryPath 2>&1
@@ -28,19 +47,19 @@ if (Test-Path $teensySize) {
         Write-Host $_ -ForegroundColor Green
     }
     
-    Write-Host "==================" -ForegroundColor Cyan
-    Write-Host ""
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "teensy_size validation failed (exit code: $LASTEXITCODE)"
-        Write-Warning "This may indicate the teensy_size version doesn't support Teensy 4.1"
-        Write-Warning "The binary may still be valid for Teensy 4.1 - continuing build..."
-    } else {
-        Write-Host "Binary validation successful!" -ForegroundColor Green
-    }
+    $teensySizeSuccess = ($LASTEXITCODE -eq 0)
 } else {
-    Write-Warning "teensy_size.exe not found at: $teensySize"
-    Write-Warning "Skipping teensy_size validation"
+    Write-Warning "No teensy_size tool found"
+    $teensySizeSuccess = $false
+}
+
+Write-Host "==================" -ForegroundColor Cyan
+Write-Host ""
+
+if ($teensySizeSuccess) {
+    Write-Host "Binary validation successful!" -ForegroundColor Green
+} else {
+    Write-Warning "teensy_size validation failed, but binary may still be valid"
 }
 
 # Generate hex file
