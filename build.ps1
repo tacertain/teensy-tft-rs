@@ -64,7 +64,7 @@ if ($teensySizeSuccess) {
 
 # Generate hex file
 Write-Host "Generating hex file..."
-cargo objcopy --release --bin main -- -O ihex target/main.hex
+cargo objcopy --release --bin main -- -O ihex target/main.hex >$null 2>&1
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Build completed successfully!"
