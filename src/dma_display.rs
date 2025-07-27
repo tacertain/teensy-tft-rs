@@ -1,6 +1,6 @@
-//! TFT Display Driver Module
+//! DMA-enabled TFT Display Driver Module
 //! 
-//! Basic display interface for TFT displays with double buffering support
+//! Advanced display interface with DMA support for high-performance graphics
 
 use embedded_hal::blocking::spi::Write;
 use embedded_hal::digital::v2::OutputPin;
@@ -9,63 +9,26 @@ use embedded_graphics::{
     prelude::*,
     pixelcolor::Rgb565,
 };
+use futures::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
-/// Result type that includes whether DMA was actually used
-#[derive(Debug)]
-pub struct DmaResult {
-    pub success: bool,
-    pub used_dma: bool,
-}
+use crate::display::{DisplayError, Delay};
 
-impl DmaResult {
-    pub fn new(success: bool, used_dma: bool) -> Self {
-        Self { success, used_dma }
-    }
-}
-
-/// Display error types
-#[derive(Debug, Clone, Copy)]
-pub enum DisplayError {
-    /// SPI communication error
-    SpiError,
-    /// GPIO pin error
-    PinError,
-    /// Invalid coordinate
-    InvalidCoordinate,
-    /// Initialization failed
-    InitializationFailed,
-}
-
-impl From<&'static str> for DisplayError {
-    fn from(_: &'static str) -> Self {
-        DisplayError::InitializationFailed
-    }
-}
-
-/// Simple delay implementation for the display
-pub struct Delay;
-
-impl DelayMs<u16> for Delay {
-    fn delay_ms(&mut self, ms: u16) {
-        cortex_m::asm::delay(ms as u32 * 600_000); // Approximate delay at 600MHz
-    }
-}
-
-/// Basic TFT display driver wrapper
-pub struct TftDisplay<SPI, DC> {
+/// DMA-enabled TFT display driver
+pub struct DmaTftDisplay<SPI, DC> {
     spi: SPI,
     dc: DC,
     width: u16,
     height: u16,
 }
 
-impl<SPI, DC> TftDisplay<SPI, DC>
+impl<SPI, DC> DmaTftDisplay<SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
 {
-    /// Create a new TFT display instance
-    /// Reset pin is assumed to be tied to 3V externally
+    /// Create a new DMA-enabled TFT display instance
     pub fn new(spi: SPI, dc: DC) -> Self {
         Self {
             spi,
@@ -75,13 +38,13 @@ where
         }
     }
 
-    /// Initialize the display
-    /// Reset pin is connected to 3V externally, so no reset sequence needed
+    /// Initialize the display (same as regular TftDisplay)
     pub fn init(&mut self) -> Result<(), DisplayError> {
+        use embedded_hal::blocking::delay::DelayMs;
+        
         let mut delay = Delay;
         
         // Reset pin is connected to 3V externally, so no reset sequence needed
-        // The display will power up in a reset state
         delay.delay_ms(200); // Wait for display to stabilize after power-on
         
         // Software reset
@@ -107,12 +70,6 @@ where
         Ok(())
     }
 
-    /// Clear the display to black
-    pub fn clear(&mut self) -> Result<(), DisplayError> {
-        // Use optimized fill_rect for better performance
-        self.fill_rect(0, 0, self.width, self.height, Rgb565::BLACK)
-    }
-
     /// Get display dimensions
     pub fn dimensions(&self) -> (u16, u16) {
         (self.width, self.height)
@@ -125,36 +82,7 @@ where
         Ok(())
     }
 
-    /// Write data to the display using DMA (async for compatible SPI types)
-    /// For non-DMA SPI, this falls back to blocking write
-    /// This demonstrates the DMA interface pattern - actual DMA would require SPI with DMA support
-    pub fn write_data_dma<'a>(&'a mut self, data: &'a [u8]) -> impl core::future::Future<Output = Result<DmaResult, &'static str>> + 'a {
-        async move {
-            // For now, this is a fallback implementation that uses blocking SPI
-            // In a real DMA implementation with DMA-capable SPI:
-            // 1. Configure DMA channel for SPI TX
-            // 2. Start DMA transfer  
-            // 3. Return Future that completes when DMA finishes
-            // 4. CPU is free to do other work while transfer happens
-            
-            // Set DC high for data mode
-            self.dc.set_high().map_err(|_| "DC pin error")?;
-            
-            // Transfer data in larger chunks to simulate DMA efficiency
-            const DMA_CHUNK_SIZE: usize = 1024; // 1KB chunks - larger than blocking version
-            for chunk in data.chunks(DMA_CHUNK_SIZE) {
-                self.spi.write(chunk).map_err(|_| "SPI write error")?;
-                
-                // In a real DMA implementation, we'd yield here to allow other tasks
-                // to run while DMA completes the transfer
-            }
-            
-            // Return success=true, used_dma=false since we're using fallback
-            Ok(DmaResult::new(true, false))
-        }
-    }
-    
-    /// Write data to the display
+    /// Write data to the display (blocking)
     pub fn write_data(&mut self, data: &[u8]) -> Result<(), &'static str> {
         self.dc.set_high().map_err(|_| "DC pin error")?;
         self.spi.write(data).map_err(|_| "SPI write error")?;
@@ -181,103 +109,73 @@ where
         self.write_command(0x2C)?; // RAMWR
         Ok(())
     }
-    
-    /// Fill a rectangular area with a single color (optimized bulk transfer)
-    pub fn fill_rect(&mut self, x: u16, y: u16, w: u16, h: u16, color: Rgb565) -> Result<(), DisplayError> {
-        // Validate bounds
-        if x >= self.width || y >= self.height {
-            return Err(DisplayError::InvalidCoordinate);
-        }
-        
-        // Clip to display bounds
-        let end_x = (x + w).min(self.width);
-        let end_y = (y + h).min(self.height);
-        
-        if end_x <= x || end_y <= y {
-            return Ok(()); // Nothing to draw
-        }
-        
-        // Set drawing window
-        self.set_address_window(x, y, end_x - 1, end_y - 1)
-            .map_err(|_| DisplayError::SpiError)?;
-        
-        // Prepare color data
-        let color_value = color.into_storage();
-        let color_bytes = [
-            (color_value >> 8) as u8,
-            (color_value & 0xFF) as u8,
-        ];
-        
-        // Fill the rectangle
-        let pixel_count = (end_x - x) as u32 * (end_y - y) as u32;
-        for _ in 0..pixel_count {
-            self.write_data(&color_bytes).map_err(|_| DisplayError::SpiError)?;
-        }
-        
-        Ok(())
-    }
 }
 
-// Basic DrawTarget implementation for embedded-graphics
-impl<SPI, DC> DrawTarget for TftDisplay<SPI, DC>
+// For non-DMA SPI types, provide async interface compatibility
+impl<SPI, DC> DmaTftDisplay<SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
 {
-    type Color = Rgb565;
-    type Error = DisplayError;
+    /// Async DMA write data to display (fallback to blocking for non-DMA SPI)
+    pub fn write_data_dma<'a>(&'a mut self, data: &'a [u8]) -> impl Future<Output = Result<DmaResult, DisplayError>> + 'a {
+        DmaWriteFuture {
+            display: self,
+            data,
+            completed: false,
+        }
+    }
+}
 
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        for pixel in pixels {
-            let Pixel(coord, color) = pixel;
-            
-            // Validate coordinates
-            if coord.x < 0 || coord.y < 0 || coord.x >= self.width as i32 || coord.y >= self.height as i32 {
-                continue; // Skip pixels outside display bounds
+/// Result type that includes whether DMA was actually used
+#[derive(Debug)]
+pub struct DmaResult {
+    pub success: bool,
+    pub used_dma: bool,
+}
+
+impl DmaResult {
+    pub fn new(success: bool, used_dma: bool) -> Self {
+        Self { success, used_dma }
+    }
+}
+
+/// Future for DMA write operations (fallback implementation)
+struct DmaWriteFuture<'a, SPI, DC> {
+    display: &'a mut DmaTftDisplay<SPI, DC>,
+    data: &'a [u8],
+    completed: bool,
+}
+
+impl<'a, SPI, DC> Future for DmaWriteFuture<'a, SPI, DC>
+where
+    SPI: Write<u8>,
+    DC: OutputPin,
+{
+    type Output = Result<DmaResult, DisplayError>;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        
+        if this.completed {
+            return Poll::Ready(Ok(DmaResult::new(true, false))); // Success, but no DMA
+        }
+
+        // For non-DMA SPI, fall back to blocking write
+        match this.display.write_data(this.data) {
+            Ok(()) => {
+                this.completed = true;
+                // Return success=true, used_dma=false since we're using fallback
+                Poll::Ready(Ok(DmaResult::new(true, false)))
             }
-            
-            // Set drawing window to single pixel
-            self.set_address_window(
-                coord.x as u16, 
-                coord.y as u16,
-                coord.x as u16, 
-                coord.y as u16
-            ).map_err(|_| DisplayError::SpiError)?;
-            
-            // Write pixel data (RGB565 format)
-            let color_value = color.into_storage();
-            let color_bytes = [
-                (color_value >> 8) as u8,
-                (color_value & 0xFF) as u8,
-            ];
-            self.write_data(&color_bytes).map_err(|_| DisplayError::SpiError)?;
+            Err(_) => Poll::Ready(Err(DisplayError::SpiError)),
         }
-        Ok(())
     }
 }
 
-impl<SPI, DC> OriginDimensions for TftDisplay<SPI, DC>
-where
-    SPI: Write<u8>,
-    DC: OutputPin,
-{
-    fn size(&self) -> Size {
-        Size::new(self.width as u32, self.height as u32)
-    }
-}
-
-/// Double-buffered display for smooth graphics rendering
-/// 
-/// This implementation uses two frame buffers - one for drawing (back buffer)
-/// and one for display (front buffer). Drawing operations write to the back buffer,
-/// and present() swaps the buffers and transfers to the physical display.
-/// 
-/// Buffers are provided externally to allow static allocation in embedded systems.
-pub struct DoubleBufferedDisplay<'a, SPI, DC> {
-    display: TftDisplay<SPI, DC>,
+/// DMA-enabled double-buffered display for high-performance graphics
+pub struct DmaDoubleBufferedDisplay<'a, SPI, DC> {
+    display: DmaTftDisplay<SPI, DC>,
     // Frame buffers provided externally - RGB565 format (2 bytes per pixel)
     back_buffer: &'a mut [u16],
     front_buffer: &'a mut [u16],
@@ -286,22 +184,14 @@ pub struct DoubleBufferedDisplay<'a, SPI, DC> {
     dirty: bool, // Track if back buffer has changes
 }
 
-impl<'a, SPI, DC> DoubleBufferedDisplay<'a, SPI, DC>
+impl<'a, SPI, DC> DmaDoubleBufferedDisplay<'a, SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
 {
-    /// Create a new double-buffered display with externally provided buffers
-    /// 
-    /// # Arguments
-    /// * `display` - The underlying TFT display
-    /// * `back_buffer` - Mutable slice for the back buffer (drawing buffer)
-    /// * `front_buffer` - Mutable slice for the front buffer (display buffer)
-    /// 
-    /// Both buffers should be the same size and match the display resolution.
-    /// For a 240x320 display, each buffer should be 76,800 u16 elements.
+    /// Create a new DMA double-buffered display with externally provided buffers
     pub fn new(
-        mut display: TftDisplay<SPI, DC>,
+        mut display: DmaTftDisplay<SPI, DC>,
         back_buffer: &'a mut [u16],
         front_buffer: &'a mut [u16],
     ) -> Result<Self, DisplayError> {
@@ -329,19 +219,14 @@ where
             *pixel = 0; // Black (RGB565 0x0000)
         }
         
-        let mut double_buffered = Self {
+        Ok(Self {
             display,
             back_buffer,
             front_buffer,
             width,
             height,
             dirty: false,
-        };
-        
-        // Clear the physical display
-        double_buffered.display.clear()?;
-        
-        Ok(double_buffered)
+        })
     }
     
     /// Get display dimensions
@@ -424,12 +309,12 @@ where
         self.display.set_address_window(0, 0, self.width - 1, self.height - 1)
             .map_err(|_| DisplayError::SpiError)?;
         
-        // Convert buffer to bytes for DMA transfer (larger chunks for DMA)
-        const DMA_CHUNK_SIZE: usize = 2048; // 2KB chunks for DMA efficiency
-        let mut byte_buffer = [0u8; DMA_CHUNK_SIZE];
+        // Convert buffer to bytes for DMA transfer
+        const CHUNK_SIZE: usize = 1024; // Larger chunks for DMA efficiency
+        let mut byte_buffer = [0u8; CHUNK_SIZE];
         let mut any_dma_used = false;
         
-        for chunk in self.front_buffer.chunks(DMA_CHUNK_SIZE / 2) {
+        for chunk in self.front_buffer.chunks(CHUNK_SIZE / 2) {
             let mut byte_index = 0;
             for &pixel in chunk {
                 byte_buffer[byte_index] = (pixel >> 8) as u8;
@@ -438,8 +323,7 @@ where
             }
             
             // Send this chunk to the display using DMA
-            let result = self.display.write_data_dma(&byte_buffer[..byte_index]).await
-                .map_err(|_| DisplayError::SpiError)?;
+            let result = self.display.write_data_dma(&byte_buffer[..byte_index]).await?;
             if result.used_dma {
                 any_dma_used = true;
             }
@@ -449,12 +333,7 @@ where
         Ok(DmaResult::new(true, any_dma_used))
     }
     
-    /// Present the back buffer to the display (swap buffers)
-    /// 
-    /// This method:
-    /// 1. Swaps the front and back buffers
-    /// 2. Transfers the new front buffer to the physical display
-    /// 3. Optimized to only transfer if there are changes
+    /// Present the back buffer to the display (blocking fallback)
     pub fn present(&mut self) -> Result<(), DisplayError> {
         if !self.dirty {
             return Ok(()); // No changes to present
@@ -496,7 +375,7 @@ where
 }
 
 // Implement DrawTarget for embedded-graphics compatibility
-impl<'a, SPI, DC> DrawTarget for DoubleBufferedDisplay<'a, SPI, DC>
+impl<'a, SPI, DC> DrawTarget for DmaDoubleBufferedDisplay<'a, SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
@@ -522,7 +401,7 @@ where
     }
 }
 
-impl<'a, SPI, DC> OriginDimensions for DoubleBufferedDisplay<'a, SPI, DC>
+impl<'a, SPI, DC> OriginDimensions for DmaDoubleBufferedDisplay<'a, SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,

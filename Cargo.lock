@@ -500,10 +500,12 @@ dependencies = [
  "display-interface-spi",
  "embedded-graphics",
  "embedded-hal 0.2.7",
+ "futures",
  "heapless",
  "ili9341",
  "nb 1.1.0",
  "panic-halt",
+ "pin-utils",
  "teensy4-bsp",
  "teensy4-panic",
 ]

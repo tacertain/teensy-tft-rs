@@ -7,6 +7,8 @@
 
 pub mod display;
 pub mod graphics;
+pub mod dma_display;
 
 pub use display::{TftDisplay, DoubleBufferedDisplay, DisplayError};
+pub use dma_display::{DmaTftDisplay, DmaDoubleBufferedDisplay};
 pub use graphics::*;
