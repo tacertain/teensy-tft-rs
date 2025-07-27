@@ -6,7 +6,7 @@ use teensy4_bsp::rt::entry;
 use teensy4_bsp as bsp;
 use bsp::board;
 
-use teensy_tft_rs::{TftDisplay, DoubleBufferedDisplay};
+use teensy_tft_rs::dma_display::{DmaTftDisplay, DmaDoubleBufferedDisplay};
 
 // For the DMA async example - using pin_utils for pinning futures
 use pin_utils::pin_mut;
@@ -26,6 +26,14 @@ static mut FRONT_BUFFER: [u16; 240 * 320] = [0; 240 * 320];
 #[entry]
 fn main() -> ! {
     let mut peripherals = board::t41(board::instances());
+    
+    // Configure DMA channels for SPI transfers
+    let mut dma = peripherals.dma;
+    let mut dma_channel_tx = dma[0].take().unwrap(); // Use DMA channel 0 for TX
+    dma_channel_tx.set_disable_on_completion(true);
+    
+    let mut dma_channel_rx = dma[1].take().unwrap(); // Use DMA channel 1 for RX
+    dma_channel_rx.set_disable_on_completion(true);
     
     // Configure SPI for the display with frequency
     let spi = board::lpspi(
@@ -51,8 +59,8 @@ fn main() -> ! {
     // Initial delay
     cortex_m::asm::delay(120_000_000);
     
-    // Create TFT display instance (regular one, but with DMA methods)
-    let base_display = TftDisplay::new(spi, dc_pin);
+    // Create TFT display instance with DMA support
+    let base_display = DmaTftDisplay::new_with_dma(spi, dc_pin, dma_channel_tx, dma_channel_rx);
     
     // Flash LED to indicate display creation succeeded
     led.clear();
@@ -60,9 +68,9 @@ fn main() -> ! {
     led.set();
     cortex_m::asm::delay(60_000_000); // ~100ms delay
 
-    // Create double buffered display with static buffers
+    // Create DMA-enabled double buffered display with static buffers
     let mut display = unsafe {
-        DoubleBufferedDisplay::new(
+        DmaDoubleBufferedDisplay::new(
             base_display, 
             &mut BACK_BUFFER, 
             &mut FRONT_BUFFER

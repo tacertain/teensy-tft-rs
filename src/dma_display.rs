@@ -12,8 +12,22 @@ use embedded_graphics::{
 use futures::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use teensy4_bsp::hal::dma;
 
 use crate::display::{DisplayError, Delay};
+
+/// Result type that includes whether DMA was actually used
+#[derive(Debug)]
+pub struct DmaResult {
+    pub success: bool,
+    pub used_dma: bool,
+}
+
+impl DmaResult {
+    pub fn new(success: bool, used_dma: bool) -> Self {
+        Self { success, used_dma }
+    }
+}
 
 /// DMA-enabled TFT display driver
 pub struct DmaTftDisplay<SPI, DC> {
@@ -21,6 +35,9 @@ pub struct DmaTftDisplay<SPI, DC> {
     dc: DC,
     width: u16,
     height: u16,
+    // DMA channels for SPI transfers
+    dma_channel_tx: Option<dma::channel::Channel>,
+    dma_channel_rx: Option<dma::channel::Channel>,
 }
 
 impl<SPI, DC> DmaTftDisplay<SPI, DC>
@@ -28,13 +45,39 @@ where
     SPI: Write<u8>,
     DC: OutputPin,
 {
-    /// Create a new DMA-enabled TFT display instance
+    /// Create a new DMA-enabled TFT display instance without DMA channels (fallback mode)
     pub fn new(spi: SPI, dc: DC) -> Self {
         Self {
             spi,
             dc,
             width: 240,
             height: 320,
+            dma_channel_tx: None,
+            dma_channel_rx: None,
+        }
+    }
+
+    /// Create a new DMA-enabled TFT display instance with DMA channels
+    pub fn new_with_dma(
+        spi: SPI, 
+        dc: DC, 
+        dma_channel_tx: dma::channel::Channel,
+        dma_channel_rx: dma::channel::Channel,
+    ) -> Self {
+        let mut tx_channel = dma_channel_tx;
+        let mut rx_channel = dma_channel_rx;
+        
+        // Configure DMA channels for SPI operations
+        tx_channel.set_disable_on_completion(true);
+        rx_channel.set_disable_on_completion(true);
+        
+        Self {
+            spi,
+            dc,
+            width: 240,
+            height: 320,
+            dma_channel_tx: Some(tx_channel),
+            dma_channel_rx: Some(rx_channel),
         }
     }
 
@@ -111,40 +154,34 @@ where
     }
 }
 
-// For non-DMA SPI types, provide async interface compatibility
+// For SPI types that support DMA, provide async interface compatibility
 impl<SPI, DC> DmaTftDisplay<SPI, DC>
 where
     SPI: Write<u8>,
     DC: OutputPin,
 {
-    /// Async DMA write data to display (fallback to blocking for non-DMA SPI)
+    /// Async DMA write data to display
     pub fn write_data_dma<'a>(&'a mut self, data: &'a [u8]) -> impl Future<Output = Result<DmaResult, DisplayError>> + 'a {
         DmaWriteFuture {
             display: self,
             data,
-            completed: false,
+            state: DmaWriteState::NotStarted,
         }
     }
 }
 
-/// Result type that includes whether DMA was actually used
-#[derive(Debug)]
-pub struct DmaResult {
-    pub success: bool,
-    pub used_dma: bool,
+/// State tracking for DMA write operations
+enum DmaWriteState {
+    NotStarted,
+    InProgress,
+    Completed,
 }
 
-impl DmaResult {
-    pub fn new(success: bool, used_dma: bool) -> Self {
-        Self { success, used_dma }
-    }
-}
-
-/// Future for DMA write operations (fallback implementation)
+/// Future for DMA write operations
 struct DmaWriteFuture<'a, SPI, DC> {
     display: &'a mut DmaTftDisplay<SPI, DC>,
     data: &'a [u8],
-    completed: bool,
+    state: DmaWriteState,
 }
 
 impl<'a, SPI, DC> Future for DmaWriteFuture<'a, SPI, DC>
@@ -154,21 +191,53 @@ where
 {
     type Output = Result<DmaResult, DisplayError>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        
-        if this.completed {
-            return Poll::Ready(Ok(DmaResult::new(true, false))); // Success, but no DMA
-        }
 
-        // For non-DMA SPI, fall back to blocking write
-        match this.display.write_data(this.data) {
-            Ok(()) => {
-                this.completed = true;
-                // Return success=true, used_dma=false since we're using fallback
-                Poll::Ready(Ok(DmaResult::new(true, false)))
+        match this.state {
+            DmaWriteState::NotStarted => {
+                // Set DC high for data mode
+                if let Err(_) = this.display.dc.set_high() {
+                    return Poll::Ready(Err(DisplayError::PinError));
+                }
+
+                if let Some(tx_channel) = this.display.dma_channel_tx.as_mut() {
+                    // Configure DMA channel for SPI transfer
+                    tx_channel.set_disable_on_completion(true);
+
+                    unsafe {
+                        tx_channel.set_source_buffer(this.data);
+                        tx_channel.set_destination(this.display.spi as *const _ as u32);
+                        tx_channel.set_transfer_size(this.data.len() as u32);
+                        tx_channel.enable();
+                    }
+
+                    this.state = DmaWriteState::InProgress;
+                } else {
+                    // Fallback to blocking SPI write
+                    match this.display.spi.write(this.data) {
+                        Ok(()) => {
+                            this.state = DmaWriteState::Completed;
+                            return Poll::Ready(Ok(DmaResult::new(true, false)));
+                        }
+                        Err(_) => return Poll::Ready(Err(DisplayError::SpiError)),
+                    }
+                }
             }
-            Err(_) => Poll::Ready(Err(DisplayError::SpiError)),
+            DmaWriteState::InProgress => {
+                // Check if DMA transfer is complete
+                if let Some(tx_channel) = this.display.dma_channel_tx.as_mut() {
+                    if tx_channel.is_complete() {
+                        tx_channel.clear_complete();
+                        this.state = DmaWriteState::Completed;
+                        return Poll::Ready(Ok(DmaResult::new(true, true)));
+                    }
+                }
+
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            DmaWriteState::Completed => Poll::Ready(Ok(DmaResult::new(true, true))),
         }
     }
 }
