@@ -29,6 +29,7 @@ ili9341 = "0.5"
 # Async and futures for DMA
 futures = { version = "0.3", default-features = false }
 pin-utils = "0.1"
+imxrt-dma = "0.1.1"
 
 [dependencies.heapless]
 version = "0.8"

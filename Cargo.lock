@@ -503,6 +503,7 @@ dependencies = [
  "futures",
  "heapless",
  "ili9341",
+ "imxrt-dma",
  "nb 1.1.0",
  "panic-halt",
  "pin-utils",

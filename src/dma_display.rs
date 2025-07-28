@@ -4,17 +4,21 @@
 
 use embedded_hal::blocking::spi::Write;
 use embedded_hal::digital::v2::OutputPin;
-use embedded_hal::blocking::delay::DelayMs;
 use embedded_graphics::{
     prelude::*,
     pixelcolor::Rgb565,
 };
-use futures::Future;
+use futures::{
+    Future,
+    pin_mut, // Import the `pin!` macro for pinning
+};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use teensy4_bsp::hal::dma;
 
 use crate::display::{DisplayError, Delay};
+
+extern crate alloc; // Link the `alloc` crate for heap allocation support
 
 /// Result type that includes whether DMA was actually used
 #[derive(Debug)]
@@ -31,7 +35,7 @@ impl DmaResult {
 
 /// DMA-enabled TFT display driver
 pub struct DmaTftDisplay<SPI, DC> {
-    spi: SPI,
+    spi: SpiWrapper<SPI>,
     dc: DC,
     width: u16,
     height: u16,
@@ -48,7 +52,7 @@ where
     /// Create a new DMA-enabled TFT display instance without DMA channels (fallback mode)
     pub fn new(spi: SPI, dc: DC) -> Self {
         Self {
-            spi,
+            spi: SpiWrapper { spi },
             dc,
             width: 240,
             height: 320,
@@ -72,7 +76,7 @@ where
         rx_channel.set_disable_on_completion(true);
         
         Self {
-            spi,
+            spi: SpiWrapper { spi },
             dc,
             width: 240,
             height: 320,
@@ -161,11 +165,12 @@ where
     DC: OutputPin,
 {
     /// Async DMA write data to display
-    pub fn write_data_dma<'a>(&'a mut self, data: &'a [u8]) -> impl Future<Output = Result<DmaResult, DisplayError>> + 'a {
+    pub fn write_data_dma<'a>(&'a mut self, data: &'a [u8]) -> DmaWriteFuture<'a, SPI, DC> {
         DmaWriteFuture {
             display: self,
             data,
             state: DmaWriteState::NotStarted,
+            transfer: None, // Initialize transfer as None
         }
     }
 }
@@ -179,45 +184,47 @@ enum DmaWriteState {
 
 /// Future for DMA write operations
 struct DmaWriteFuture<'a, SPI, DC> {
-    display: &'a mut DmaTftDisplay<SPI, DC>,
+    display: &'a mut DmaTftDisplay<SPI, DC>, // Use mutable reference instead of Pin
     data: &'a [u8],
     state: DmaWriteState,
+    transfer: Option<imxrt_dma::peripheral::Write<'a, SPI, u8>>, // Remove Box and Pin
 }
 
-impl<'a, SPI, DC> Future for DmaWriteFuture<'a, SPI, DC>
+impl<'a, SPI, DC> Future for DmaWriteFuture<'a, SpiWrapper<SPI>, DC>
 where
-    SPI: Write<u8>,
+    SPI: Write<u8> + imxrt_dma::peripheral::Destination<u8>,
     DC: OutputPin,
 {
     type Output = Result<DmaResult, DisplayError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        match this.state {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Access fields directly since Pin is no longer used
+        match self.state {
             DmaWriteState::NotStarted => {
                 // Set DC high for data mode
-                if let Err(_) = this.display.dc.set_high() {
+                if let Err(_) = self.display.dc.set_high() {
                     return Poll::Ready(Err(DisplayError::PinError));
                 }
 
-                if let Some(tx_channel) = this.display.dma_channel_tx.as_mut() {
-                    // Configure DMA channel for SPI transfer
-                    tx_channel.set_disable_on_completion(true);
+                if let Some(tx_channel) = self.display.dma_channel_tx.as_mut() {
+                    // Configure and start DMA transfer
+                    let transfer = unsafe {
+                        imxrt_dma::peripheral::write(
+                            tx_channel,
+                            self.data,
+                            &mut self.display.spi.spi, // Pass inner SPI directly
+                        )
+                    };
 
-                    unsafe {
-                        tx_channel.set_source_buffer(this.data);
-                        tx_channel.set_destination(this.display.spi as *const _ as u32);
-                        tx_channel.set_transfer_size(this.data.len() as u32);
-                        tx_channel.enable();
-                    }
-
-                    this.state = DmaWriteState::InProgress;
+                    self.state = DmaWriteState::InProgress;
+                    pin_mut!(transfer); // Pin the transfer
+                    self.transfer = Some(transfer); // Store transfer directly
+                    Poll::Pending
                 } else {
                     // Fallback to blocking SPI write
-                    match this.display.spi.write(this.data) {
+                    match self.display.spi.write(self.data) {
                         Ok(()) => {
-                            this.state = DmaWriteState::Completed;
+                            self.state = DmaWriteState::Completed;
                             return Poll::Ready(Ok(DmaResult::new(true, false)));
                         }
                         Err(_) => return Poll::Ready(Err(DisplayError::SpiError)),
@@ -225,16 +232,22 @@ where
                 }
             }
             DmaWriteState::InProgress => {
-                // Check if DMA transfer is complete
-                if let Some(tx_channel) = this.display.dma_channel_tx.as_mut() {
-                    if tx_channel.is_complete() {
-                        tx_channel.clear_complete();
-                        this.state = DmaWriteState::Completed;
-                        return Poll::Ready(Ok(DmaResult::new(true, true)));
+                // Await DMA transfer completion
+                if let Some(transfer) = &mut self.transfer {
+                    match transfer.as_mut().poll(cx) {
+                        Poll::Ready(Ok(())) => {
+                            self.state = DmaWriteState::Completed;
+                            return Poll::Ready(Ok(DmaResult::new(true, true)));
+                        }
+                        Poll::Ready(Err(_)) => {
+                            return Poll::Ready(Err(DisplayError::SpiError));
+                        }
+                        Poll::Pending => {
+                            return Poll::Pending;
+                        }
                     }
                 }
 
-                cx.waker().wake_by_ref();
                 Poll::Pending
             }
             DmaWriteState::Completed => Poll::Ready(Ok(DmaResult::new(true, true))),
@@ -440,6 +453,49 @@ where
     pub fn force_refresh(&mut self) -> Result<(), DisplayError> {
         self.dirty = true;
         self.present()
+    }
+}
+
+/// Wrapper type for SPI to implement `Destination<u8>`
+pub struct SpiWrapper<SPI> {
+    pub spi: SPI,
+}
+
+// Implement the `Destination<u8>` trait for SpiWrapper
+unsafe impl<SPI> imxrt_dma::peripheral::Destination<u8> for SpiWrapper<SPI>
+where
+    SPI: Write<u8>,
+{
+    fn destination_signal(&self) -> u32 {
+        // Return a mock signal value for now
+        0 // Replace with actual signal configuration
+    }
+
+    fn destination_address(&self) -> *const u8 {
+        // Return a mock address for now
+        core::ptr::null() // Replace with actual SPI address
+    }
+
+    fn enable_destination(&mut self) {
+        // Enable the SPI peripheral for DMA
+        // Add actual enable logic here
+    }
+
+    fn disable_destination(&mut self) {
+        // Disable the SPI peripheral for DMA
+        // Add actual disable logic here
+    }
+}
+
+// Implement the `embedded_hal::blocking::spi::Write` trait for SpiWrapper
+impl<SPI> embedded_hal::blocking::spi::Write<u8> for SpiWrapper<SPI>
+where
+    SPI: embedded_hal::blocking::spi::Write<u8>,
+{
+    type Error = SPI::Error;
+
+    fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        self.spi.write(words)
     }
 }
 
