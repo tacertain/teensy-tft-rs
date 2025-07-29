@@ -15,6 +15,7 @@ cortex-m = "0.7"
 embedded-hal = "0.2"
 nb = "1.0"
 panic-halt = "0.2"
+pin-utils = "0.1"
 
 # Teensy 4.x specific (assuming Teensy 4.0/4.1)
 teensy4-bsp = { version = "0.5", features = ["rt"] }

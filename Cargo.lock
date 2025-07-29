@@ -504,6 +504,7 @@ dependencies = [
  "ili9341",
  "nb 1.1.0",
  "panic-halt",
+ "pin-utils",
  "teensy4-bsp",
  "teensy4-panic",
 ]

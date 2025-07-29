@@ -26,6 +26,8 @@ static mut FRONT_BUFFER: [u16; 240 * 320] = [0; 240 * 320];
 fn main() -> ! {
     let mut peripherals = board::t41(board::instances());
         
+    let dma = peripherals.dma[0].take().unwrap();
+
     // Configure SPI for the display with frequency
     let spi = board::lpspi(
         peripherals.lpspi4,
@@ -63,6 +65,8 @@ fn main() -> ! {
     let mut display = unsafe {
         DoubleBufferedDisplay::new(
             base_display, 
+            spi,
+            dma,
             &mut BACK_BUFFER, 
             &mut FRONT_BUFFER
         ).expect("Failed to create double buffered display")
