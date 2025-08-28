@@ -7,6 +7,7 @@
 
 pub mod display;
 pub mod graphics;
+pub mod blocking;
 
 pub use display::{TftDisplay, DoubleBufferedDisplay, DisplayError};
 pub use graphics::*;

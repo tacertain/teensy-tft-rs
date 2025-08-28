@@ -10,7 +10,6 @@ use embedded_hal::blocking::spi::Write;
 use embedded_hal::digital::v2::OutputPin;
 use teensy4_bsp::hal::dma::channel::Channel;
 use teensy4_bsp::hal::lpspi;
-use teensy4_bsp::board;
 
 /// Display error types
 #[derive(Debug, Clone, Copy)]
@@ -429,7 +428,7 @@ where
             self.spi.dma_write(&mut self.dma, front_buffer_u32).unwrap().await.unwrap();
         };
         pin_utils::pin_mut!(task);
-        board::blocking::run(task);
+        blocking::run(task);
         self.dirty = false;
         Ok(())
     }
